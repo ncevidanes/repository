@@ -91,12 +91,22 @@ app.post('/api/repository/simulations', upload.single('simulation_file'), async 
 
     res.status(201).json({ message: "Upload concluído!", id: saved._id });
   } catch (err) {
-    // Se der erro, tenta limpar o temporário para evitar lixo no disco
-    if (req.file) fs.unlinkSync(req.file.path).catch(() => {});
+    // 1. Imprime o erro verdadeiro nos logs do Render para nós vermos
+    console.error("🔴 Erro real durante o upload:", err);
+    
+    // 2. Limpa o arquivo temporário de forma segura
+    if (req.file) {
+      try { 
+        fs.unlinkSync(req.file.path); 
+      } catch (cleanupErr) { 
+        console.error("Erro ao limpar temporário:", cleanupErr); 
+      }
+    }
+    
+    // 3. Devolve o erro para o terminal (cURL) em vez de travar o servidor
     res.status(500).json({ error: err.message });
   }
 });
-
 // 3. BUSCA COMUNITÁRIA (Com Filtros)
 app.get('/api/repository/simulations', async (req, res) => {
   try {
