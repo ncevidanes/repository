@@ -20,8 +20,13 @@ app.use(express.json());
 const upload = multer({ dest: 'temp/' });
 
 // Autenticação Google Drive via Service Account
+// Puxa o JSON da nuvem (Render) ou do disco (Local)
+const gcpCredentials = process.env.GCP_JSON_CONTENT 
+  ? JSON.parse(process.env.GCP_JSON_CONTENT) 
+  : require('./gcp-service-account.json');
+
 const auth = new google.auth.GoogleAuth({
-  keyFile: process.env.GOOGLE_APPLICATION_CREDENTIALS,
+  credentials: gcpCredentials, // Note que mudou de 'keyFile' para 'credentials'
   scopes: ['https://www.googleapis.com/auth/drive.file']
 });
 const drive = google.drive({ version: 'v3', auth });
