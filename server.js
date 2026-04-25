@@ -20,14 +20,13 @@ app.use(express.json());
 const upload = multer({ dest: 'temp/' });
 
 // Autenticação Google Drive via Service Account
-// Puxa o JSON da nuvem (Render) ou do disco (Local)
 const gcpCredentials = process.env.GCP_JSON_CONTENT 
   ? JSON.parse(process.env.GCP_JSON_CONTENT) 
   : require('./gcp-service-account.json');
 
 const auth = new google.auth.GoogleAuth({
-  credentials: gcpCredentials, // Note que mudou de 'keyFile' para 'credentials'
-  scopes: ['https://www.googleapis.com/auth/drive.file']
+  credentials: gcpCredentials,
+  scopes: ['https://www.googleapis.com/auth/drive'] 
 });
 const drive = google.drive({ version: 'v3', auth });
 
@@ -60,20 +59,18 @@ app.post('/api/repository/simulations', upload.single('simulation_file'), async 
 
     const metadata = JSON.parse(req.body.metadata || '{}');
 
-    // A. Faz o upload para o Google Drive via Stream
-    const fileMetadata = {
-      name: req.file.originalname,
-      parents: [process.env.DRIVE_FOLDER_ID]
-    };
-    const media = {
-      mimeType: req.file.mimetype,
-      body: fs.createReadStream(req.file.path)
-    };
-
+    // A. Faz o upload para o Google Drive Compartilhado
     const driveResponse = await drive.files.create({
-      resource: fileMetadata,
-      media: media,
-      fields: 'id'
+      requestBody: {
+        name: req.file.originalname,
+        parents: [process.env.DRIVE_FOLDER_ID]
+      },
+      media: {
+        mimeType: req.file.mimetype,
+        body: fs.createReadStream(req.file.path)
+      },
+      fields: 'id',
+      supportsAllDrives: true // <-- CORREÇÃO CRÍTICA AQUI
     });
 
     // B. Salva os metadados no MongoDB com o ID do Drive
@@ -96,22 +93,14 @@ app.post('/api/repository/simulations', upload.single('simulation_file'), async 
 
     res.status(201).json({ message: "Upload concluído!", id: saved._id });
   } catch (err) {
-    // 1. Imprime o erro verdadeiro nos logs do Render para nós vermos
     console.error("🔴 Erro real durante o upload:", err);
-    
-    // 2. Limpa o arquivo temporário de forma segura
     if (req.file) {
-      try { 
-        fs.unlinkSync(req.file.path); 
-      } catch (cleanupErr) { 
-        console.error("Erro ao limpar temporário:", cleanupErr); 
-      }
+      try { fs.unlinkSync(req.file.path); } catch (cleanupErr) { }
     }
-    
-    // 3. Devolve o erro para o terminal (cURL) em vez de travar o servidor
     res.status(500).json({ error: err.message });
   }
 });
+
 // 3. BUSCA COMUNITÁRIA (Com Filtros)
 app.get('/api/repository/simulations', async (req, res) => {
   try {
@@ -139,7 +128,8 @@ app.get('/api/repository/download/:id', async (req, res) => {
 
     const file = await drive.files.get({
       fileId: simulation.file_info.external_id,
-      fields: 'webContentLink'
+      fields: 'webContentLink',
+      supportsAllDrives: true // <-- ADICIONADO AQUI TAMBÉM
     });
 
     res.redirect(file.data.webContentLink);
