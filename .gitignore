@@ -1,0 +1,4 @@
+node_modules/
+.env
+temp/
+gcp-service-account.json
