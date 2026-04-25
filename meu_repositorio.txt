@@ -1,0 +1,8 @@
+meu-repositorio-lhc/
+├── .env                  # Suas senhas, JWT_SECRET e chaves do Google
+├── package.json          # Dependências (express, mongoose, googleapis, jsonwebtoken)
+├── server.js             # O arquivo principal que junta todas as rotas
+├── middleware/
+│   └── auth.js           # O porteiro que verifica o token JWT
+└── models/
+    └── Simulation.js     # O esquema do MongoDB com as regras da física
