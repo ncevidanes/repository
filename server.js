@@ -105,7 +105,8 @@ app.get('/api/repository/simulations', async (req, res) => {
     if (event_type) dbQuery['physics_params.event_type'] = event_type;
     if (energy_gev) dbQuery['physics_params.energy_gev'] = Number(energy_gev);
     if (generator) dbQuery['software_stack.generator'] = generator;
-    dbQuery['provenance.validation_status'] = status || 'verified';
+    if (status) dbQuery['provenance.validation_status'] = status;
+    //dbQuery['provenance.validation_status'] = status || 'verified';
 
     const results = await Simulation.find(dbQuery).sort({ 'provenance.created_at': -1 });
     res.json({ total: results.length, data: results });
