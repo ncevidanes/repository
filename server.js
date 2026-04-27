@@ -115,21 +115,40 @@ app.get('/api/repository/simulations', async (req, res) => {
   }
 });
 
-// 4. DOWNLOAD DIRETO (Redireciona para o Zenodo)
-app.get('/api/repository/download/:id', async (req, res) => {
-  try {
-    const simulation = await Simulation.findById(req.params.id);
-    if (!simulation) return res.status(404).json({ error: "Arquivo não encontrado." });
+// 4. DOWNLOAD SEGURO (Proxy para Rascunhos Privados do Zenodo)
+    app.get('/api/repository/download/:id', async (req, res) => {
+      try {
+        const simulation = await Simulation.findById(req.params.id);
+        if (!simulation) return res.status(404).json({ error: "Arquivo não encontrado." });
 
-    // Monta o link permanente do Zenodo usando o ID e o nome do arquivo
-    const zenodoLink = `https://zenodo.org/record/${simulation.file_info.external_id}/files/${simulation.file_info.name}`;
-    res.redirect(zenodoLink);
-    
-  } catch (err) {
-    res.status(500).json({ error: "Erro ao gerar link de download." });
-  }
-});
+        // A. Pede ao Zenodo os dados do rascunho usando o seu token
+        const zenodoRes = await axios.get(`https://zenodo.org/api/deposit/depositions/${simulation.file_info.external_id}`, {
+          params: { access_token: process.env.ZENODO_TOKEN }
+        });
 
+        // B. Encontra o link interno de download do arquivo
+        const fileData = zenodoRes.data.files.find(f => f.filename === simulation.file_info.name);
+        if (!fileData) return res.status(404).json({ error: "Arquivo não encontrado no Zenodo." });
+
+        // C. Faz o download via servidor (Proxy) para não vazar o seu Token na internet
+        const fileResponse = await axios({
+          method: 'GET',
+          url: fileData.links.download,
+          params: { access_token: process.env.ZENODO_TOKEN },
+          responseType: 'stream'
+        });
+
+        // D. Repassa o arquivo diretamente para o navegador do usuário
+        res.setHeader('Content-Disposition', `attachment; filename="${simulation.file_info.name}"`);
+        res.setHeader('Content-Type', fileResponse.headers['content-type'] || 'application/octet-stream');
+        
+        fileResponse.data.pipe(res);
+
+      } catch (err) {
+        console.error("🔴 Erro no download:", err.message);
+        res.status(500).json({ error: "Erro ao resgatar o arquivo do Zenodo." });
+      }
+    });
 // INICIA O SERVIDOR
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Portal de Dados rodando na porta ${PORT}`));
