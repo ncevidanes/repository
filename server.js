@@ -149,6 +149,25 @@ app.get('/api/repository/simulations', async (req, res) => {
         res.status(500).json({ error: "Erro ao resgatar o arquivo do Zenodo." });
       }
     });
+  // 5. EXCLUIR (Soft Delete protegido por Token)
+    app.delete('/api/repository/simulations/:id', verifyAdmin, async (req, res) => {
+      try {
+        const deleted = await Simulation.findByIdAndUpdate(
+          req.params.id,
+          { 
+            'provenance.is_deleted': true, 
+            'provenance.deleted_at': new Date() 
+          },
+          { new: true }
+        );
+    
+        if (!deleted) return res.status(404).json({ error: "Arquivo não encontrado." });
+        res.json({ message: "Simulação movida para a lixeira (Soft Delete)." });
+    
+      } catch (err) {
+        res.status(500).json({ error: "Erro ao excluir a simulação." });
+      }
+    });
 // INICIA O SERVIDOR
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`🚀 Portal de Dados rodando na porta ${PORT}`));
