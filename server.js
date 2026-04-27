@@ -12,6 +12,10 @@ const verifyAdmin = require('./middleware/auth');
 
 const app = express();
 app.use(express.json());
+app.use(express.static('public'));
+    ```
+    *Isso avisa ao servidor: "Se alguém acessar o site principal, entregue os arquivos da pasta public".*
+    ```
 
 // ==========================================
 // CONFIGURAÇÕES DE NUVEM E DISCO
