@@ -61,7 +61,10 @@ app.post('/api/repository/simulations', upload.single('simulation_file'), async 
     const fileStream = fs.createReadStream(req.file.path);
     await axios.put(`${bucketUrl}/${req.file.originalname}`, fileStream, {
       params: { access_token: process.env.ZENODO_TOKEN },
-      headers: { 'Content-Type': 'application/octet-stream' }
+      headers: { 
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': req.file.size //
+      }
     });
 
     // Passo C: Salva o registro no seu MongoDB com o ID oficial do CERN
