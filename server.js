@@ -1,173 +1,198 @@
-require('dotenv').config();
 const express = require('express');
 const mongoose = require('mongoose');
 const multer = require('multer');
-const axios = require('axios'); // <-- A novidade que liga seu app ao CERN
+const axios = require('axios');
+const FormData = require('form-data');
 const jwt = require('jsonwebtoken');
-const fs = require('fs');
-
-// Importações internas
-const Simulation = require('./models/Simulation');
-const verifyAdmin = require('./middleware/auth');
+const cors = require('cors');
+require('dotenv').config();
 
 const app = express();
+const upload = multer({ storage: multer.memoryStorage() });
 
-// Permite servir a interface web (o arquivo index.html dentro da pasta 'public')
-app.use(express.static('public'));
+// --- CONFIGURAÇÕES E MIDDLEWARES ---
+app.use(cors());
 app.use(express.json());
+app.use(express.static('public'));
 
-// ==========================================
-// CONFIGURAÇÕES
-// ==========================================
-// Salva temporariamente no disco para não estourar a memória RAM do Render
-const upload = multer({ dest: 'temp/' });
+const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET;
 
-// ==========================================
-// CONEXÃO COM MONGODB
-// ==========================================
+// Conexão MongoDB
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log('🟢 Conectado ao MongoDB'))
-  .catch(err => console.error('🔴 Erro no MongoDB:', err));
+  .then(() => console.log("🚀 Conectado ao MongoDB Atlas"))
+  .catch(err => console.error("❌ Erro ao conectar ao MongoDB:", err));
 
+// --- MODELO DE DADOS (SIMULATION) ---
+const SimulationSchema = new mongoose.Schema({
+  filename: String,
+  zenodo_id: String,
+  download_url: String,
+  physics_params: {
+    event_type: String,
+    energy_gev: Number,
+    pileup_mu: Number
+  },
+  software_stack: {
+    generator: String,
+    framework: String
+  },
+  provenance: {
+    author: String,
+    created_at: { type: Date, default: Date.now },
+    validation_status: { type: String, default: 'pending' },
+    is_deleted: { type: Boolean, default: false },
+    deleted_at: Date
+  }
+});
 
-// ==========================================
-// ROTAS DA API
-// ==========================================
+const Simulation = mongoose.model('Simulation', SimulationSchema);
 
-// 1. LOGIN
+// --- MIDDLEWARE DE AUTENTICAÇÃO ---
+const verifyAdmin = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) return res.status(401).json({ error: "Acesso negado. Token ausente." });
+
+  jwt.verify(token, JWT_SECRET, (err, user) => {
+    if (err) return res.status(403).json({ error: "Token inválido ou expirado." });
+    req.user = user;
+    next();
+  });
+};
+
+// --- ROTAS DE AUTENTICAÇÃO ---
+
 app.post('/api/auth/login', (req, res) => {
   const { username, password } = req.body;
   if (username === process.env.ADMIN_USER && password === process.env.ADMIN_PASS) {
-    const token = jwt.sign({ role: 'admin', user: username }, process.env.JWT_SECRET, { expiresIn: '2h' });
+    const token = jwt.sign({ user: username, role: 'admin' }, JWT_SECRET, { expiresIn: '2h' });
     return res.json({ token });
   }
   res.status(401).json({ error: "Credenciais inválidas." });
 });
 
-// 2. UPLOAD (O "Motor" de Integração: Render -> Zenodo -> Mongo)
-app.post('/api/repository/simulations', upload.single('simulation_file'), async (req, res) => {
-  try {
-    if (!req.file) return res.status(400).json({ error: "Nenhum arquivo enviado." });
-    const metadata = JSON.parse(req.body.metadata || '{}');
+// --- ROTAS DO REPOSITÓRIO ---
 
-    // Passo A: Cria um "espaço" vazio no Zenodo
-    const createRes = await axios.post('https://zenodo.org/api/deposit/depositions', {}, {
-      params: { access_token: process.env.ZENODO_TOKEN }
-    });
-    const bucketUrl = createRes.data.links.bucket;
-    const depositId = createRes.data.id;
-
-    // Passo B: Sobe o arquivo físico do servidor do Render para o Zenodo
-    const fileStream = fs.createReadStream(req.file.path);
-    await axios.put(`${bucketUrl}/${req.file.originalname}`, fileStream, {
-      params: { access_token: process.env.ZENODO_TOKEN },
-      headers: { 
-        'Content-Type': 'application/octet-stream',
-        'Content-Length': req.file.size.toString()
-      }
-    });
-
-    // Passo C: Salva o registro no seu MongoDB com o ID oficial do CERN
-    const newSimulation = new Simulation({
-      file_info: {
-        name: req.file.originalname,
-        size_bytes: req.file.size,
-        format: metadata.format || 'unknown',
-        external_id: depositId.toString() // Guardamos o ID do Zenodo para downloads futuros
-      },
-      physics_params: metadata.physics_params,
-      software_stack: metadata.software_stack,
-      provenance: metadata.provenance
-    });
-    const saved = await newSimulation.save();
-
-    // Passo D: Limpa o arquivo temporário do Render
-    fs.unlinkSync(req.file.path);
-
-    res.status(201).json({ 
-      message: "Upload para o Zenodo e registro no Mongo concluídos com sucesso!", 
-      id: saved._id 
-    });
-
-  } catch (err) {
-    console.error("🔴 Erro na comunicação com o Zenodo:", err.response ? err.response.data : err.message);
-    // Garante que o arquivo temporário seja apagado mesmo se der erro
-    if (req.file) { try { fs.unlinkSync(req.file.path); } catch (e) {} }
-    res.status(500).json({ error: "Falha ao processar o arquivo para o repositório." });
-  }
-});
-
-// 3. BUSCA COMUNITÁRIA (Usada pela sua Interface Web)
+// 1. LISTAR SIMULAÇÕES (Com filtros)
 app.get('/api/repository/simulations', async (req, res) => {
   try {
-    const { event_type, energy_gev, generator, status } = req.query;
-    const dbQuery = {};
-    if (event_type) dbQuery['physics_params.event_type'] = event_type;
-    if (energy_gev) dbQuery['physics_params.energy_gev'] = Number(energy_gev);
-    if (generator) dbQuery['software_stack.generator'] = generator;
-    if (status) dbQuery['provenance.validation_status'] = status;
-    //dbQuery['provenance.validation_status'] = status || 'verified';
+    const { status, event } = req.query;
+    let query = { 'provenance.is_deleted': false };
 
-    const results = await Simulation.find(dbQuery).sort({ 'provenance.created_at': -1 });
-    res.json({ total: results.length, data: results });
+    if (status) query['provenance.validation_status'] = status;
+    else if (!req.headers['authorization']) {
+        // Se não for admin, vê apenas os verificados por padrão
+        query['provenance.validation_status'] = 'verified';
+    }
+
+    if (event) query['physics_params.event_type'] = event;
+
+    const results = await Simulation.find(query).sort({ 'provenance.created_at': -1 });
+    res.json(results);
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: "Erro ao buscar dados." });
   }
 });
 
-// 4. DOWNLOAD SEGURO (Proxy para Rascunhos Privados do Zenodo)
-    app.get('/api/repository/download/:id', async (req, res) => {
-      try {
-        const simulation = await Simulation.findById(req.params.id);
-        if (!simulation) return res.status(404).json({ error: "Arquivo não encontrado." });
+// 2. UPLOAD (Integração Zenodo + MongoDB)
+app.post('/api/repository/simulations', upload.single('simulation_file'), async (req, res) => {
+  try {
+    const metadata = JSON.parse(req.body.metadata);
+    
+    // Passo A: Criar rascunho no Zenodo vinculado à Comunidade
+    const zenodoRes = await axios.post('https://zenodo.org/api/deposit/depositions', {
+      metadata: {
+        title: `NIPS-CERN UFJF: ${req.file.originalname}`,
+        upload_type: 'dataset',
+        description: 'Simulações de física de altas energias - Grupo NIPS-CERN UFJF.',
+        creators: [{ name: 'Assis, Nelson', affiliation: 'UFJF' }],
+        communities: [{ identifier: 'hep_group-ufjf' }] // 
+      }
+    }, {
+      params: { access_token: process.env.ZENODO_TOKEN }
+    });
 
-        // A. Pede ao Zenodo os dados do rascunho usando o seu token
-        const zenodoRes = await axios.get(`https://zenodo.org/api/deposit/depositions/${simulation.file_info.external_id}`, {
-          params: { access_token: process.env.ZENODO_TOKEN }
-        });
+    const bucketUrl = zenodoRes.data.links.bucket;
+    const depositionId = zenodoRes.data.id;
 
-        // B. Encontra o link interno de download do arquivo
-        const fileData = zenodoRes.data.files.find(f => f.filename === simulation.file_info.name);
-        if (!fileData) return res.status(404).json({ error: "Arquivo não encontrado no Zenodo." });
+    // Passo B: Upload do arquivo físico para o bucket do Zenodo
+    await axios.put(`${bucketUrl}/${req.file.originalname}`, req.file.buffer, {
+      params: { access_token: process.env.ZENODO_TOKEN }
+    });
 
-        // C. Faz o download via servidor (Proxy) para não vazar o seu Token na internet
-        const fileResponse = await axios({
-          method: 'GET',
-          url: fileData.links.download,
-          params: { access_token: process.env.ZENODO_TOKEN },
-          responseType: 'stream'
-        });
-
-        // D. Repassa o arquivo diretamente para o navegador do usuário
-        res.setHeader('Content-Disposition', `attachment; filename="${simulation.file_info.name}"`);
-        res.setHeader('Content-Type', fileResponse.headers['content-type'] || 'application/octet-stream');
-        
-        fileResponse.data.pipe(res);
-
-      } catch (err) {
-        console.error("🔴 Erro no download:", err.message);
-        res.status(500).json({ error: "Erro ao resgatar o arquivo do Zenodo." });
+    // Passo C: Salvar metadados no MongoDB
+    const newSimulation = new Simulation({
+      filename: req.file.originalname,
+      zenodo_id: depositionId,
+      download_url: zenodoRes.data.links.latest_draft || zenodoRes.data.links.html,
+      physics_params: metadata.physics_params,
+      software_stack: metadata.software_stack,
+      provenance: {
+          author: metadata.provenance?.author || 'Nelson Assis',
+          validation_status: metadata.provenance?.validation_status || 'pending'
       }
     });
-  // 5. EXCLUIR (Soft Delete protegido por Token)
-    app.delete('/api/repository/simulations/:id', verifyAdmin, async (req, res) => {
-      try {
-        const deleted = await Simulation.findByIdAndUpdate(
-          req.params.id,
-          { 
-            'provenance.is_deleted': true, 
-            'provenance.deleted_at': new Date() 
-          },
-          { new: true }
-        );
-    
-        if (!deleted) return res.status(404).json({ error: "Arquivo não encontrado." });
-        res.json({ message: "Simulação movida para a lixeira (Soft Delete)." });
-    
-      } catch (err) {
-        res.status(500).json({ error: "Erro ao excluir a simulação." });
-      }
+
+    await newSimulation.save();
+    res.status(201).json({ message: "Upload concluído com sucesso!", id: newSimulation._id });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Falha no processo de upload." });
+  }
+});
+
+// 3. DOWNLOAD VIA PROXY (Para arquivos privados/drafts)
+app.get('/api/repository/download/:id', async (req, res) => {
+  try {
+    const sim = await Simulation.findById(req.params.id);
+    if (!sim) return res.status(404).send("Simulação não encontrada.");
+
+    // Busca os detalhes do arquivo no Zenodo para pegar a URL direta
+    const zenodoFiles = await axios.get(`https://zenodo.org/api/deposit/depositions/${sim.zenodo_id}/files`, {
+      params: { access_token: process.env.ZENODO_TOKEN }
     });
-// INICIA O SERVIDOR
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`🚀 Portal de Dados rodando na porta ${PORT}`));
+
+    const fileUrl = zenodoFiles.data[0].links.download;
+
+    // Faz o streaming do arquivo do Zenodo para o usuário
+    const response = await axios({
+      method: 'get',
+      url: fileUrl,
+      responseType: 'stream',
+      params: { access_token: process.env.ZENODO_TOKEN }
+    });
+
+    res.setHeader('Content-Disposition', `attachment; filename=${sim.filename}`);
+    response.data.pipe(res);
+
+  } catch (err) {
+    res.status(500).send("Erro ao processar download.");
+  }
+});
+
+// 4. EXCLUIR (Soft Delete protegido)
+app.delete('/api/repository/simulations/:id', verifyAdmin, async (req, res) => {
+  try {
+    const deleted = await Simulation.findByIdAndUpdate(
+      req.params.id,
+      { 
+        'provenance.is_deleted': true, 
+        'provenance.deleted_at': new Date() 
+      },
+      { new: true }
+    );
+    
+    if (!deleted) return res.status(404).json({ error: "Arquivo não encontrado." });
+    res.json({ message: "Simulação movida para a lixeira." });
+    
+  } catch (err) {
+    res.status(500).json({ error: "Erro ao excluir." });
+  }
+});
+
+app.listen(PORT, () => {
+  console.log(PORT, `\n✅ Servidor rodando na porta ${PORT}`);
+});
