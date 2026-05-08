@@ -5,7 +5,8 @@ require('dotenv').config();
 
 const app = express();
 
-// --- CORREÇÃO DE SEGURANÇA (CSP) ---
+// --- CORRECÇÃO DE SEGURANÇA (CSP) ---
+// Resolve os erros "Content-Security-Policy" vistos no console
 app.use((req, res, next) => {
   res.setHeader(
     'Content-Security-Policy',
@@ -22,11 +23,12 @@ app.use(cors());
 app.use(express.json());
 
 // --- CONEXÃO MONGODB ---
+// Certifique-se de configurar a variável MONGO_URI no painel do Render
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("🚀 MongoDB Atlas conectado com sucesso"))
-  .catch(err => console.error("❌ Erro ao conectar ao MongoDB:", err));
+  .then(() => console.log("🚀 MongoDB Atlas conectado"))
+  .catch(err => console.error("❌ Erro MongoDB:", err));
 
-// --- MODELO ---
+// --- MODELO DE DADOS ---
 const SimulationSchema = new mongoose.Schema({
   hf_repo: String,
   root_path: String,
@@ -34,6 +36,7 @@ const SimulationSchema = new mongoose.Schema({
     energy_gev: Number,
     pileup_mu: Number
   },
+  description: String,
   created_at: { type: Date, default: Date.now }
 });
 
@@ -41,17 +44,35 @@ const Simulation = mongoose.model('Simulation', SimulationSchema);
 
 // --- ROTAS ---
 
-// Rota raiz (Resolve o erro "Cannot GET /")
+// Rota raiz: Resolve o erro "Cannot GET /"
 app.get('/', (req, res) => {
-  res.send('<h1>Portal de Dados NIPS-CERN UFJF</h1><p>O servidor está rodando e pronto para receber dados.</p>');
+  res.send(`
+    <body style="font-family: sans-serif; padding: 40px;">
+      <h1>Portal de Dados NIPS-CERN UFJF</h1>
+      <p>O servidor está rodando e pronto para receber dados.</p>
+      <div id="status">Verificando banco de dados...</div>
+      <script>
+        fetch('/api/repository/simulations')
+          .then(r => r.json())
+          .then(data => {
+            const div = document.getElementById('status');
+            if(data.length === 0) {
+              div.innerHTML = "<b>Status:</b> Nenhuma simulação registrada ainda. Execute o script Python.";
+            } else {
+              div.innerHTML = "<b>Status:</b> " + data.length + " simulação(ões) encontrada(s)!";
+            }
+          });
+      </script>
+    </body>
+  `);
 });
 
-// Rota de Registro (Para o Python)
+// Rota de Registro (Chamada pelo Python)
 app.post('/api/repository/register-hf', async (req, res) => {
   try {
     const entry = new Simulation(req.body);
     await entry.save();
-    res.status(201).json({ message: "Simulação indexada!" });
+    res.status(201).json({ message: "Sincronizado com sucesso!" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -61,11 +82,7 @@ app.post('/api/repository/register-hf', async (req, res) => {
 app.get('/api/repository/simulations', async (req, res) => {
   try {
     const data = await Simulation.find().sort({ created_at: -1 });
-    const results = data.map(sim => ({
-      ...sim._doc,
-      url: `https://huggingface.co/datasets/${sim.hf_repo}/tree/main/${sim.root_path}`
-    }));
-    res.json(results);
+    res.json(data);
   } catch (err) {
     res.status(500).json({ error: "Erro ao listar dados." });
   }
