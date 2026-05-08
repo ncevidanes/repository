@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Repositório de Simulações - ATLAS</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+</head>
+<body class="bg-light">
+
+<div class="container mt-5">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>🔬 Portal de Dados - Simulações LHC</h2>
+        <span class="badge bg-primary">Status: Online</span>
+    </div>
+
+    <div class="card mb-4 shadow-sm">
+        <div class="card-body">
+            <form id="searchForm" class="row g-3">
+                <div class="col-md-4">
+                    <label class="form-label">Tipo de Evento</label>
+                    <input type="text" class="form-control" id="eventType" placeholder="Ex: Minimum Bias">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">Gerador</label>
+                    <input type="text" class="form-control" id="generator" placeholder="Ex: Geant4">
+                </div>
+                <div class="col-md-3 d-flex align-items-end">
+                    <button type="submit" class="btn btn-dark w-100">Buscar Simulações</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div class="card shadow-sm">
+        <div class="card-body">
+            <table class="table table-hover">
+                <thead class="table-dark">
+                    <tr>
+                        <th>Nome do Arquivo</th>
+                        <th>Evento</th>
+                        <th>Energia (GeV)</th>
+                        <th>Gerador</th>
+                        <th>Ação</th>
+                    </tr>
+                </thead>
+                <tbody id="tabelaDados">
+                    <tr><td colspan="5" class="text-center">Carregando dados do servidor...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<script>
+    // Função para buscar os dados na sua própria API
+    async function carregarSimulacoes(filtros = '') {
+        try {
+            const resposta = await fetch('/api/repository/simulations' + filtros);
+            const json = await resposta.json();
+            const tbody = document.getElementById('tabelaDados');
+            tbody.innerHTML = ''; // Limpa o "Carregando..."
+
+            if (json.data.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Nenhuma simulação encontrada.</td></tr>';
+                return;
+            }
+
+            // Cria uma linha na tabela para cada arquivo do MongoDB
+            json.data.forEach(sim => {
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><strong>${sim.file_info.name}</strong></td>
+                    <td>${sim.physics_params.event_type}</td>
+                    <td>${sim.physics_params.energy_gev}</td>
+                    <td>${sim.software_stack.generator}</td>
+                    <td>
+                        <a href="/api/repository/download/${sim._id}" class="btn btn-sm btn-success" target="_blank">
+                            ⬇️ Download
+                        </a>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } catch (erro) {
+            console.error("Erro ao buscar dados:", erro);
+        }
+    }
+
+    // Intercepta o clique no botão de buscar para aplicar os filtros
+    document.getElementById('searchForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        const evento = document.getElementById('eventType').value;
+        const gerador = document.getElementById('generator').value;
+        
+        let query = '?';
+        if (evento) query += `event_type=${evento}&`;
+        if (gerador) query += `generator=${gerador}`;
+        
+        carregarSimulacoes(query);
+    });
+
+    // Carrega tudo automaticamente assim que a página abre
+    carregarSimulacoes();
+</script>
+
+</body>
+</html>
