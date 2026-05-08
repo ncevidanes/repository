@@ -5,13 +5,13 @@ require('dotenv').config();
 
 const app = express();
 
-// --- CORREÇÃO DE SEGURANÇA (CSP) ---
+// --- SEGURANÇA (CSP) ---
 app.use((req, res, next) => {
   res.setHeader(
     'Content-Security-Policy',
     "default-src 'self'; " +
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
-    "style-src 'self' 'unsafe-inline'; " +
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net; " +
+    "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; " +
     "img-src 'self' data: https://huggingface.co; " +
     "connect-src 'self' https://huggingface.co https://*.mongodb.net;"
   );
@@ -23,83 +23,92 @@ app.use(express.json());
 
 // --- CONEXÃO MONGODB ---
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("🚀 Banco de dados NIPS-CERN conectado"))
-  .catch(err => console.error("❌ Erro ao conectar ao MongoDB:", err));
+  .then(() => console.log("🚀 MongoDB Conectado"))
+  .catch(err => console.error("❌ Erro MongoDB:", err));
 
-// --- MODELO DE DADOS ---
+// --- MODELO ---
 const Simulation = mongoose.model('Simulation', new mongoose.Schema({
   hf_repo: String,
   root_path: String,
-  physics_params: {
-    energy_gev: Number,
-    pileup_mu: Number
-  },
+  physics_params: { energy_gev: Number, pileup_mu: Number },
   description: String,
   created_at: { type: Date, default: Date.now }
 }));
 
-// --- INTERFACE WEB (Página Inicial) ---
+// --- INTERFACE (O ESPELHO) ---
 app.get('/', (req, res) => {
   res.send(`
     <!DOCTYPE html>
     <html lang="pt-br">
     <head>
       <meta charset="UTF-8">
-      <title>Portal de Dados UFJF</title>
+      <title>Portal NIPS-CERN UFJF</title>
+      <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
       <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 40px; background: #f0f2f5; color: #333; }
-        .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-        h1 { color: #003366; border-bottom: 2px solid #003366; padding-bottom: 10px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-        th, td { padding: 12px; text-align: left; border-bottom: 1px solid #ddd; }
-        th { background-color: #f8f9fa; color: #555; }
-        .btn { background: #007bff; color: white; padding: 6px 12px; text-decoration: none; border-radius: 4px; font-size: 14px; }
-        .btn:hover { background: #0056b3; }
-        code { background: #eee; padding: 2px 4px; border-radius: 4px; }
+        body { background: #f8f9fa; padding: 50px; }
+        .card { border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }
+        .layer-item { font-size: 0.9em; padding: 5px 10px; background: #e9ecef; border-radius: 4px; margin: 2px; display: inline-block; }
       </style>
     </head>
     <body>
       <div class="container">
-        <h1>Portal de Dados NIPS-CERN UFJF</h1>
-        <p>Repositório de simulações Lorenzetti (Geant4)</p>
-        
-        <table>
-          <thead>
-            <tr>
-              <th>Data</th>
-              <th>Pasta (HF)</th>
-              <th>Energia</th>
-              <th>Pile-up (μ)</th>
-              <th>Ação</th>
-            </tr>
-          </thead>
-          <tbody id="tabela-corpo">
-            <tr><td colspan="5" style="text-align:center">Carregando dados...</td></tr>
-          </tbody>
-        </table>
+        <div class="card p-4">
+          <h1 class="text-primary">Portal de Dados NIPS-CERN UFJF</h1>
+          <p class="text-muted">Espelhamento em tempo real das simulações Lorenzetti</p>
+          <hr>
+          <div id="lista-simulacoes">Carregando simulações...</div>
+        </div>
       </div>
 
       <script>
+        async function carregarCamadas(repo, path, divId) {
+          const div = document.getElementById(divId);
+          div.innerHTML = "<i>Buscando camadas no HF...</i>";
+          try {
+            const res = await fetch('https://huggingface.co/api/datasets/' + repo + '/tree/main/' + path);
+            const files = await res.json();
+            const folders = files.filter(f => f.type === 'directory');
+            
+            if(folders.length === 0) {
+              div.innerHTML = "<span class='text-danger'>Nenhuma subpasta encontrada.</span>";
+            } else {
+              div.innerHTML = folders.map(f => '<span class="layer-item">📁 ' + f.path.split("/").pop() + '</span>').join(' ');
+            }
+          } catch (e) {
+            div.innerHTML = "Erro ao espelhar estrutura.";
+          }
+        }
+
         fetch('/api/repository/simulations')
           .then(r => r.json())
           .then(data => {
-            const corpo = document.getElementById('tabela-corpo');
+            const container = document.getElementById('lista-simulacoes');
             if (data.length === 0) {
-              corpo.innerHTML = "<tr><td colspan='5' style='text-align:center'>Nenhum dado registrado.</td></tr>";
+              container.innerHTML = "<div class='alert alert-warning'>Nenhum registro encontrado.</div>";
               return;
             }
-            corpo.innerHTML = data.map(sim => \`
-              <tr>
-                <td>\${new Date(sim.created_at).toLocaleDateString()}</td>
-                <td><code>\${sim.root_path}</code></td>
-                <td>\${sim.physics_params?.energy_gev || '---'} GeV</td>
-                <td>\${sim.physics_params?.pileup_mu || '---'}</td>
-                <td>
-                  <a href="https://huggingface.co/datasets/\${sim.hf_repo}/tree/main/\${sim.root_path}" 
-                     target="_blank" class="btn">Abrir Pasta 📂</a>
-                </td>
-              </tr>
-            \`).join('');
+            container.innerHTML = data.map((sim, index) => {
+              const divId = "layers-" + index;
+              return \`
+                <div class="mb-4 border-bottom pb-3">
+                  <div class="d-flex justify-content-between align-items-center">
+                    <div>
+                      <h5 class="mb-0">Simulação \${new Date(sim.created_at).toLocaleDateString()} - \${sim.physics_params?.energy_gev || '---'} GeV</h5>
+                      <small class="text-muted">Caminho: <code>\${sim.root_path}</code> | μ: \${sim.physics_params?.pileup_mu || '---'}</small>
+                    </div>
+                    <div class="d-flex gap-2">
+                      <button class="btn btn-outline-primary btn-sm" onclick="carregarCamadas('\${sim.hf_repo}', '\${sim.root_path}', '\${divId}')">
+                        Espelhar Estrutura 🔄
+                      </button>
+                      <a href="https://huggingface.co/datasets/\${sim.hf_repo}/tree/main/\${sim.root_path}" target="_blank" class="btn btn-primary btn-sm">
+                        Abrir no HF 📂
+                      </a>
+                    </div>
+                  </div>
+                  <div id="\${divId}" class="mt-3"></div>
+                </div>
+              \`;
+            }).join('');
           });
       </script>
     </body>
@@ -107,28 +116,19 @@ app.get('/', (req, res) => {
   `);
 });
 
-// --- ROTAS DA API ---
-
-// Registro (Chamado pelo Python)
+// --- API ---
 app.post('/api/repository/register-hf', async (req, res) => {
   try {
     const entry = new Simulation(req.body);
     await entry.save();
-    res.status(201).json({ message: "Indexado com sucesso!" });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
+    res.status(201).json({ message: "OK" });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Listagem (Usada pelo script do navegador)
 app.get('/api/repository/simulations', async (req, res) => {
-  try {
-    const data = await Simulation.find().sort({ created_at: -1 });
-    res.json(data);
-  } catch (err) {
-    res.status(500).json({ error: "Erro ao buscar dados." });
-  }
+  const data = await Simulation.find().sort({ created_at: -1 });
+  res.json(data);
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Servidor rodando na porta ${PORT}`));
+app.listen(PORT, () => console.log(`✅ Servidor Ativo na porta ${PORT}`));
