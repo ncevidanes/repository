@@ -24,7 +24,7 @@ app.use(express.json());
 
 // --- CONEXÃO MONGODB ---
 mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("🚀 Storage Engine ATLAS/UFJF Ativo"))
+  .then(() => console.log("🚀 Engine de Dados Conectada"))
   .catch(err => console.error("❌ Erro MongoDB:", err));
 
 // --- MODELO ---
@@ -55,7 +55,6 @@ app.get('/', (req, res) => {
         .explorer-header { background: white; border-bottom: 1px solid #e0e0e0; padding: 20px 40px; }
         .file-card { background: white; border: 1px solid #e0e0e0; border-radius: 10px; overflow: hidden; box-shadow: 0 2px 10px rgba(0,0,0,0.02); }
         .table thead { background: #fafafa; font-size: 0.75rem; text-transform: uppercase; color: #666; }
-        .file-row { transition: background 0.1s; }
         .file-row:hover { background-color: #fcfcfc; cursor: pointer; }
         .breadcrumb-item a { text-decoration: none; color: #003366; font-weight: 600; }
         .badge-physics { font-size: 0.8rem; padding: 5px 12px; border-radius: 15px; }
@@ -112,31 +111,44 @@ app.get('/', (req, res) => {
         let selectedRepo = "";
         
         async function navigate(path) {
+          console.log("📂 Navegando para:", path);
           const body = document.getElementById('explorer-body');
           body.innerHTML = '<tr><td colspan="3" class="text-center py-5"><div class="spinner-border spinner-border-sm text-primary"></div> Sincronizando...</td></tr>';
           
           try {
             const res = await fetch(\`https://huggingface.co/api/datasets/\${selectedRepo}/tree/main/\${path}\`);
-            const data = await res.json();
             
-            body.innerHTML = data.map(item => {
-              const isDir = item.type === 'directory';
-              const icon = isDir ? '📁' : '📄';
-              return \`
-                <tr class="file-row" onclick="\${isDir ? \`Maps('\${item.path}')\` : ''}">
-                  <td class="ps-4">
-                    <span class="me-2">\${icon}</span> <strong>\${item.path.split('/').pop()}</strong>
-                  </td>
-                  <td class="text-muted">\${item.size ? (item.size/1024).toFixed(1) + ' KB' : '--'}</td>
-                  <td class="text-end pe-4">
-                    \${isDir ? '<span class="badge bg-light text-dark">Pasta</span>' : 
-                    \`<a href="https://huggingface.co/datasets/\${selectedRepo}/resolve/main/\${item.path}" class="btn btn-sm btn-outline-success" download>Download</a>\`}
-                  </td>
-                </tr>\`;
-            }).join('');
+            if (!res.ok) {
+                throw new Error("Erro API HF: " + res.status);
+            }
+
+            const data = await res.json();
+            console.log("📦 Dados recebidos:", data);
+            
+            if (data.length === 0) {
+                body.innerHTML = '<tr><td colspan="3" class="text-center py-4 text-muted">Esta pasta está vazia.</td></tr>';
+            } else {
+                body.innerHTML = data.map(item => {
+                  const isDir = item.type === 'directory';
+                  const icon = isDir ? '📁' : '📄';
+                  // O item.path retornado pelo HF já é o caminho completo desde a raiz do repo
+                  return \`
+                    <tr class="file-row" onclick="\${isDir ? \`Maps('\${item.path}')\` : ''}">
+                      <td class="ps-4">
+                        <span class="me-2">\${icon}</span> <strong>\${item.path.split('/').pop()}</strong>
+                      </td>
+                      <td class="text-muted">\${item.size ? (item.size/1024).toFixed(1) + ' KB' : '--'}</td>
+                      <td class="text-end pe-4">
+                        \${isDir ? '<span class="badge bg-light text-dark">Pasta</span>' : 
+                        \`<a href="https://huggingface.co/datasets/\${selectedRepo}/resolve/main/\${item.path}" class="btn btn-sm btn-outline-success" download onclick="event.stopPropagation()">Download</a>\`}
+                      </td>
+                    </tr>\`;
+                }).join('');
+            }
             updateBreadcrumb(path);
           } catch(e) { 
-            body.innerHTML = '<tr><td colspan="3" class="text-center text-danger py-4">Erro ao acessar Hugging Face. Verifique se o repo é público.</td></tr>'; 
+            console.error("🔴 Erro de Navegação:", e);
+            body.innerHTML = '<tr><td colspan="3" class="text-center text-danger py-4">Erro ao acessar dados. Verifique se o repositório é <b>Público</b> no Hugging Face.</td></tr>'; 
           }
         }
 
@@ -146,17 +158,15 @@ app.get('/', (req, res) => {
           let currentPath = "";
           nav.innerHTML = parts.map((p, i) => {
             currentPath += (i === 0 ? p : "/" + p);
-            return \`<li class="breadcrumb-item"><a href="#" onclick="navigate('\${currentPath}')">\${p}</a></li>\`;
+            return \`<li class="breadcrumb-item"><a href="#" onclick="event.preventDefault(); navigate('\${currentPath}')">\${p}</a></li>\`;
           }).join('');
         }
 
         function initView(repo, path, energy, mu, element) {
           document.querySelectorAll('.nav-link-custom').forEach(el => el.classList.remove('active'));
           element.classList.add('active');
-          
           document.getElementById('welcome-screen').style.display = 'none';
           document.getElementById('explorer-ui').style.display = 'block';
-          
           selectedRepo = repo;
           document.getElementById('display-title').innerText = "Run: " + path.split('/').pop();
           document.getElementById('meta-badges').innerHTML = \`
@@ -170,8 +180,12 @@ app.get('/', (req, res) => {
           .then(r => r.json())
           .then(data => {
             const list = document.getElementById('run-list');
+            if (data.length === 0) {
+              list.innerHTML = '<p class="text-center text-muted small">Nenhuma run registrada.</p>';
+              return;
+            }
             list.innerHTML = data.map(sim => \`
-              <div class="nav-link-custom" onclick="initView('\${sim.hf_repo}', '\${sim.root_path}', \${sim.physics_params.energy_gev}, \${sim.physics_params.pileup_mu}, this)">
+              <div class="nav-link-custom" onclick="initView('\${sim.hf_repo}', '\${sim.root_path}', \${sim.physics_params?.energy_gev || 0}, \${sim.physics_params?.pileup_mu || 0}, this)">
                 <div class="small fw-bold">\${new Date(sim.created_at).toLocaleDateString()}</div>
                 <div class="text-muted" style="font-size: 0.8rem;">\${sim.root_path.split('/').pop()}</div>
               </div>\`).join('');
@@ -192,8 +206,10 @@ app.post('/api/repository/register-hf', async (req, res) => {
 });
 
 app.get('/api/repository/simulations', async (req, res) => {
-  const data = await Simulation.find().sort({ created_at: -1 });
-  res.json(data);
+  try {
+    const data = await Simulation.find().sort({ created_at: -1 });
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: "Erro ao buscar dados." }); }
 });
 
 const PORT = process.env.PORT || 3000;
