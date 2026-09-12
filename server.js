@@ -1,7 +1,9 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
+const { connectDatabase, pingDatabase, disconnectDatabase } = require('./db');
+const { healthHandler } = require('./health');
 
 const app = express();
 
@@ -23,9 +25,8 @@ app.use(cors());
 app.use(express.json());
 
 // --- CONEXÃO MONGODB ---
-mongoose.connect(process.env.MONGO_URI)
-  .then(() => console.log("🚀 Explorador de Dados ATLAS Conectado"))
-  .catch(err => console.error("❌ Erro MongoDB:", err));
+app.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
+app.get('/health', healthHandler(pingDatabase));
 
 // --- MODELO ---
 const Simulation = mongoose.model('Simulation', new mongoose.Schema({
@@ -179,13 +180,31 @@ app.post('/api/repository/register-hf', async (req, res) => {
     const entry = new Simulation(req.body);
     await entry.save();
     res.status(201).json({ message: "OK" });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch { res.status(503).json({ error: 'Database operation unavailable' }); }
 });
 
 app.get('/api/repository/simulations', async (req, res) => {
-  const data = await Simulation.find().sort({ created_at: -1 });
-  res.json(data);
+  try {
+    const data = await Simulation.find().sort({ created_at: -1 });
+    res.json(data);
+  } catch {
+    res.status(503).json({ error: 'Database operation unavailable' });
+  }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`✅ Servidor UFJF Ativo na porta ${PORT}`));
+async function start() {
+  await connectDatabase();
+  await pingDatabase();
+  return app.listen(PORT, () => console.log(`✅ Servidor UFJF Ativo na porta ${PORT}`));
+}
+
+if (require.main === module) {
+  start().catch(async () => {
+    console.error('Startup failed: check private MongoDB configuration and connectivity.');
+    await disconnectDatabase();
+    process.exitCode = 1;
+  });
+}
+
+module.exports = { app, start };
