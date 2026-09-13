@@ -1,0 +1,49 @@
+name: Node CI
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Node 20.19
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: '20.19.0'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: JavaScript syntax
+        run: |
+          node --check server.js
+          node --check simulation.js
+          node --check db.js
+          node --check health.js
+          node --check scripts/check-db.js
+          node --check test/database.test.js
+          node --check test/simulation.test.js
+          node --check test/simulation-http.test.js
+
+      - name: Test
+        run: npm test

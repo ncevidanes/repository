@@ -1,9 +1,15 @@
 const express = require('express');
-const mongoose = require('mongoose');
 const cors = require('cors');
 require('dotenv').config({ quiet: true });
 const { connectDatabase, pingDatabase, disconnectDatabase } = require('./db');
 const { healthHandler } = require('./health');
+const {
+  Simulation,
+  buildSimulationPayload,
+  classifySimulationError,
+  publicErrorForStatus,
+  simulationToApi,
+} = require('./simulation');
 
 const app = express();
 
@@ -29,13 +35,7 @@ app.get('/healthz', (_req, res) => res.json({ status: 'ok' }));
 app.get('/health', healthHandler(pingDatabase));
 
 // --- MODELO ---
-const Simulation = mongoose.model('Simulation', new mongoose.Schema({
-  hf_repo: String,
-  root_path: String,
-  physics_params: { energy_gev: Number, pileup_mu: Number },
-  description: String,
-  created_at: { type: Date, default: Date.now }
-}));
+// Scientific Schema v1: ./simulation.js
 
 // --- INTERFACE (O EXPLORADOR REAL) ---
 app.get('/', (req, res) => {
@@ -177,18 +177,36 @@ app.get('/', (req, res) => {
 // --- API ---
 app.post('/api/repository/register-hf', async (req, res) => {
   try {
-    const entry = new Simulation(req.body);
+    const payload = buildSimulationPayload(req.body);
+    const entry = new Simulation(payload);
+
     await entry.save();
-    res.status(201).json({ message: "OK" });
-  } catch { res.status(503).json({ error: 'Database operation unavailable' }); }
+
+    res.status(201).json({
+      message: 'OK',
+      dataset_id: entry.dataset_id,
+      schema_version: entry.schema_version
+    });
+  } catch (error) {
+    const status = classifySimulationError(error);
+
+    res.status(status).json({
+      error: publicErrorForStatus(status)
+    });
+  }
 });
 
 app.get('/api/repository/simulations', async (req, res) => {
   try {
-    const data = await Simulation.find().sort({ created_at: -1 });
-    res.json(data);
+    const data = await Simulation.find()
+      .sort({ created_at: -1 })
+      .lean();
+
+    res.json(data.map(simulationToApi));
   } catch {
-    res.status(503).json({ error: 'Database operation unavailable' });
+    res.status(503).json({
+      error: 'Database operation unavailable'
+    });
   }
 });
 
